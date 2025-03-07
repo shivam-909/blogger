@@ -108,7 +108,6 @@ impl Fragment {
 #[derive(Debug)]
 pub struct NFA {
     head: usize,
-    state_set: Mutex<HashMap<State, usize>>,
     state_list: Vec<State>,
 }
 
@@ -116,7 +115,6 @@ impl NFA {
     pub fn new() -> Self {
         Self {
             head: 0,
-            state_set: Mutex::new(HashMap::new()),
             state_list: Vec::new(),
         }
     }
@@ -125,50 +123,24 @@ impl NFA {
         self.state_list.push(state.clone());
         let idx = self.state_list.len() - 1;
 
-        let mut ss = self.state_set.lock().unwrap();
-        ss.insert(state, idx);
         idx
     }
 
-    fn link_state(&mut self, from: State, to: State) -> Result<(), String> {
-        let mut ss = self.state_set.lock().unwrap();
-        let f_idx = ss
-            .get(&from)
-            .copied()
-            .ok_or_else(|| format!("{from:?} is not in the nfa"))?;
-
-        let t_idx = ss
-            .get(&to)
-            .copied()
-            .ok_or_else(|| format!("{to:?} is not in the nfa"))?;
-
+    fn link_state(&mut self, f_idx: usize, t_idx: usize) -> Result<(), String> {
         self.state_list[f_idx].set_out(Some(t_idx));
         let mut updated = self.state_list[f_idx].clone();
         updated.set_out(Some(t_idx));
-
-        ss.remove(&from);
-        ss.insert(updated, f_idx);
         Ok(())
     }
 
-    fn link_fragment(&mut self, frag: &mut Fragment, to: State) -> Result<(), String> {
-        frag.out.iter().try_for_each(|&idx| {
-            let from_state = self
-                .state_list
-                .get(idx)
-                .cloned()
-                .ok_or_else(|| format!("Index {idx} not found in state_list"))?;
-            self.link_state(from_state, to.clone())
-        })
+    fn link_fragment(&mut self, frag: &mut Fragment, t_idx: usize) -> Result<(), String> {
+        frag.out
+            .iter()
+            .try_for_each(|&idx| self.link_state(idx, t_idx))
     }
 
     fn link_fragments(&mut self, from: &mut Fragment, to: Fragment) -> Result<(), String> {
-        let to_state = self
-            .state_list
-            .get(to.head)
-            .cloned()
-            .ok_or_else(|| format!("Index {} not found in state_list", to.head))?;
-        self.link_fragment(from, to_state)?;
+        self.link_fragment(from, to.head)?;
         from.out.iter_mut().for_each(|o| *o = to.head);
         Ok(())
     }
@@ -251,7 +223,7 @@ impl NFA {
                         right: None,
                     };
                     let idx = nfa.add_state(split.clone());
-                    nfa.link_fragment(&mut e, split)?;
+                    nfa.link_fragment(&mut e, idx)?;
                     if stack.is_empty() {
                         nfa.head = idx;
                     }
@@ -265,7 +237,7 @@ impl NFA {
                         right: None,
                     };
                     let idx = nfa.add_state(split.clone());
-                    nfa.link_fragment(&mut e, split)?;
+                    nfa.link_fragment(&mut e, idx)?;
                     let new_frag = Fragment::single_link(e.head, idx);
                     stack.push(new_frag);
                 }

@@ -37,7 +37,7 @@ impl Generator {
     ) -> Result<(), GenerationError> {
         Self::write_buf(
             buf,
-            format!(r"<h1 class='text-4xl font-bold'>{}</h1>", article.name),
+            format!(r"<h1 className='text-4xl font-bold'>{}</h1>", article.name),
         )
     }
 
@@ -60,14 +60,15 @@ impl Generator {
         statement: &Statement,
     ) -> Result<(), GenerationError> {
         match statement {
-            Statement::Heading(_, c) => {
-                Self::write_buf(buf, format!("<h3 class='text-3xl'>{}</h3>", c.to_string()))
-            }
+            Statement::Heading(_, c) => Self::write_buf(
+                buf,
+                format!("<h3 className='text-3xl'>{}</h3>", c.to_string()),
+            ),
             Statement::TextBlock(c) => Self::write_buf(buf, format!("<p>{}</p>", c.to_string())),
             Statement::CodeBlock(c) => Self::write_buf(
                 buf,
                 format!(
-                    r"<pre class='w-full overflow-x-auto'><code set:text={{`{}`}} /></pre>",
+                    r"<pre className='w-full overflow-x-auto'><code>{{`{}`}}</code></pre>",
                     c.to_string()
                 ),
             ),
@@ -75,7 +76,7 @@ impl Generator {
                 buf,
                 format!(
                     r"
-            <div class='p-8 bg-opacity-10 bg-black italic'>
+            <div className='p-8 bg-opacity-10 bg-black italic'>
                 <p>{}</p>
             </div>
             ",
@@ -89,14 +90,17 @@ impl Generator {
     fn generate_list<'a, W: Write>(buf: &'a mut W, list: &List) -> Result<(), GenerationError> {
         match list {
             List::Ordered(items) => {
-                Self::write_buf(buf, format!("<ol class='list-inside list-decimal px-8'>"))?;
+                Self::write_buf(
+                    buf,
+                    format!("<ol className='list-inside list-decimal px-8'>"),
+                )?;
                 for item in items {
                     Self::write_buf(buf, format!("<li>{}</li>", item))?;
                 }
                 Self::write_buf(buf, format!("</ol>"))?;
             }
             List::Unordered(items) => {
-                Self::write_buf(buf, format!("<ul class='list-disc list-inside px-8'>"))?;
+                Self::write_buf(buf, format!("<ul className='list-disc list-inside px-8'>"))?;
                 for item in items {
                     Self::write_buf(buf, format!("<li>{}</li>", item))?;
                 }
