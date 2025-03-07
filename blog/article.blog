@@ -1,0 +1,552 @@
+section intro {
+	paragraph {
+	h1 {`A compiler that has no purpose in life`}
+
+	aside {
+		`Source code is available at: https://github.com/shivam-909/blogger. Part of this project takes inspiration from the work of Russ Cox at https://swtch.com/~rsc/regexp/regexp1.html.`
+	}
+	
+	`There's really no practical reason to make a DSL to write blogs, especially when markdown exists. And even if you wanted to, there's no practical reason to write it all completely from scratch without anything except the standard library, in a language you don't know all that well. But learning is a good enough reason to do all those things.`
+
+	h1 {`How to make a compiler`}
+
+	`A compiler has one job: take input in some format, and produce output in another. This sounds like translation, in a sense; and that's precisely what is going on here, just with some extra steps. Your typical compiler takes something high-level and translates it into something low-level, bearing in mind some semantic structure that is encoded in the input. The sorts of compilers you will be most familiar with are those that turn
+	high-level source code into low-level machine code.`
+
+	`If C++ is your language of choice, you might use something like GCC to compile your source code. Say you've got some source code like this:`
+
+	code {`
+int square(int num) {
+	return num * num;
+}
+
+int main() {
+	square(8);
+}	
+	`}
+
+	`This is pulled straight from the default landing page at https://godbolt.org. When you tell GCC to compile this code, it'll spit out an executable file which you can run. This executable is machine code, and it's something your computer can "understand". One of the intermediate representations of your source code is assembly. Assembly is a platform-specific representation of a program, and it utilises low-level operations exposed by the microarchitecture of the platform it belongs to; on the order of moving things in and out of CPU registers and performing arithmetic. The assembly for the above may look like this:`
+
+	code {`
+square(int):
+push    rbp
+mov     rbp, rsp
+mov     DWORD PTR [rbp-4], edi
+mov     eax, DWORD PTR [rbp-4]
+imul    eax, eax
+pop     rbp
+ret
+main:
+push    rbp
+mov     rbp, rsp
+mov     edi, 8
+call    square(int)
+mov     eax, 0
+pop     rbp
+ret
+	`}
+
+	`The compiler is able to produce valid assembly based on the code, because the code conforms to a syntax and grammar imposed by the compiler/standard the compiler is based on. This syntax and grammar aims to assign meaning to the text in the source code, and the way in which the source code is organised. As writers of source code, we also understand this syntax and grammar. We know, that the above C++ code represents a program that will calculate the square of 8, and exit gracefully.`
+
+	`Now, we understand the syntax and grammar because humans are incredible at creating and adopting languages. But how do we get a compiler - which is just another program - to understand it too? We can encode this syntax and grammar into a collection of configurations, algorithms and data structures, such that the compiler can accept some source code input, and produce some executable output that aligns with our expectations of what the program should achieve given our understanding of the language.`
+	}
+}
+
+section regex {
+	paragraph {
+	h1 {`Recognising words and patterns with regex`}
+
+	`When I made this compiler, I went almost purely by intuition and vague memories of a compilers course at university. I know now that regex may not be the ideal way to handle pattern matching in a compiler (something useful for lexing, which we'll get onto later), but it was the most intuitive way for me to begin the project.`
+	
+	`Regexes, or regular expressions, are something I took for granted for quite a while. Also, something I really didn't like because I find them unreadable. Beginning to write this compiler I knew my first step was to be able to identify all my keywords and "tokens", and create a list of them from some source code. Keywords are just words that are reserved by the language syntax; the writer simply wields them but doesn't get a say in what they are. Tokens include keywords, but also include other structural blocks of a language. For example, variable names are not keywords - the author decides what they are, but they're still tokens. Tokens represent a unit in some stream of text with its own, independent meaning. To turn some stream of text into a set of tokens is to break it up into all the chunks that contain their distinct meaning.`
+
+	`To do this, you need to be able to recognise when you are looking at one of those units, and which unit you are looking at. This involves pattern matching. To give a crash course on how this works, I'll explain some basic regex. Regex is an expression language that allows you to define an expression that will match a set of inputs. The language of a regular expression is the set of all strings that will match that expression - so we are using a language to create expressions that themselves have a corresponding language.`
+
+	`A basic regex would be something like 'h.e.l.l.o', which matches the string 'hello'. The dots indicate sequencing, such that 'h.e' means 'e' must follow 'h'. For convenience, the dots in between are often eliminated, leaving us with 'hello' being the expression that matches 'hello'. There are also regex operators, for instance the ? which declares whatever character or pattern that precedes it to be optional. 'h?' will match either 'h' or '', the empty string. Parentheses can be used to apply operators to patterns rather than single characters. '(hello)?' will match either 'hello' or ''.`
+
+	`There's more operators and more things you can do with regex. I won't discuss those things but do take some time to learn some basic regex. Using regex we can define patterns that will help us identify our keywords and other tokens. My blogging language looks something like this:`
+
+	code {`
+section intro {
+	h1 {Introducing something!}
+
+	Some text.
+
+	code {
+		print("Some code")
+	}
+
+}
+
+article example {
+	intro
+}
+	`}
+
+	`There's some keywords, and tokens here. 'section', 'article', 'h1', 'code' - these are all keywords. 'intro', 'example', the text in the headers, the curly braces - these are all tokens. An opening curly brace indicates the beginning of a block, whilst a closing one indicates the end, so these are in fact their own tokens!`
+
+	`'intro' and 'example' are identifiers. The only pattern they need to follow is being an unbroken string of letters, numbers or symbols. Conversely, the keywords like 'section' and 'article' will always have a precise, strict pattern.`
+
+	`So we can define some regular expressions for all of our keywords and other tokens, but that's not enough to let us use it. We need a regular expression matcher - some system that can ingest both a regular expression and some source text, and tell us if the source text is matched by the regular expression. For basic things like keywords with simple character matching, we can just check for string equality. But once we add operators, and subexpressions, things get tricky.`
+
+	`So let's draw our attention to state machines. I won't go into detail about state machines, because then this article would end up being a book, and the blog compiler is definitely not optimised well enough to compile something like that. State machines are theoretical devices that given some set of states, some initial state, and some input, will move between states depending on the input. States have defined transitions between them that dictate where the state machine can go from any given state, and the input it receives when it's in that state will determine where it goes next. We can designate one or more states as a terminal state, telling our state machine that if it enters this state, its task is over.`
+
+	`Think of a train, that for some reason can only ever move forward, on some network of tracks. The train stations are our states, the tracks are our transitions. At each station, the train driver gets some instruction, and upon hearing that instruction (or simply getting a terminating signal), they will decide whether the train will stay put until the next instruction, or move - and if it moves, then which outbound track it should take.`
+
+	`We can apply this quite neatly to a regular expression. Take the expression 'abc(d?)', which matches the string 'abc' and 'abcd'. Our hypothetical train will start at some arbitrary starting station, S. Station S is connected to station A, representing a match on the character 'a'. Similarly, we have Station A connected to station B, B connected to C and C connected to D. We can set up our transitions, or the movement between stations via tracks, as being predicated on some rules. We can posit that if the instruction 'a' is received when the driver is at S, they may move forward to A. Similarly, if the instruction 'b' is received at station A, they may move forward to B. When they receive 'c' at B, they may move to C, and finally, if they receive 'd' at C they may move onto D. Crucially, C and D are terminal stations, meaning the at the end of all the instructions, the train must be in either C or D for our input to be valid.`
+
+	`If we supply the input instructions 'abc', the train will end up in station C, a terminal station. If we supply 'abcd', it will end up in D, a terminal station. If we supply 'ab', it will end up in B, which is not a terminal station. Our input was hence incorrect.`
+
+	`An operator such as the * operator, or Kleene star, which represents zero or more matches of the preceeding pattern, can be viewed as an instruction that causes the train to not move if repeatedly applied, or to move onto the next transition if available.`
+
+	`So we know we can model regexes with state machines, but how do we code them?`
+
+	`Russ Cox, of Google fame, designed an algorithm that utilises state machines to match regular expressions to input strings. The idea is to take a postfix representation of a regular expression, and use that to build a state machine. Similar to how one might process a postfix mathematical equation, we can process a postfix regular expression - by using a stack to evaluate the expression. We will deal in 'fragments', which are a recursively defined data structure representing a segment of a state machine that may be incomplete. We can combine fragments to form a bigger fragment, which involves taking some base fragment and linking its outputs to the second fragment. A fragment can contain one or more 'states'.`
+
+	code {
+		`
+pub enum State {
+	Transition {
+        id: usize,
+        condition: Condition,
+        output: Option<usize>,
+    },
+    Split {
+        id: usize,
+        left: Option<usize>,
+        right: Option<usize>,
+    },
+    Accept {
+        id: usize,
+    },
+}
+		`
+	}
+
+	`We deal in 3 kinds of states. Transition states are states that match on some condition and route to another state. A split state simply offers two paths to route to. An acceptance state marks a terminal state. This brings up an interesting question. How can our state machine have two outputs with no condition telling us which way to go? State machines are often also called 'automata' or 'finite automata'. Finite automata, or FAs, come in two flavours, Non-deterministic Finite Automata (NFAs) and Deterministic Finite Automata (DFAs). DFAs are, as the name suggests, deterministic. In any state, the same input will always trigger the same transition. NFAs offer the concept of non-determinism - the same input in one state may take us through any number of transitions; there exists just a probability that we engage in any of them. Of course, here we aren't dealing in probabilities - our split states don't introduce any randomness into our regular expression matching. But how we deal with that comes later.`
+
+	`Our NFA structure looks something like this:`
+
+	code {`
+pub struct NFA {
+    head: usize,
+    state_list: Vec<State>,
+}
+	`}
+
+	`We keep track of the beginning of the state machine, or the starting state, and maintain a list of all states. As we saw earlier, states contained outputs that were indices to other states in this vector. Fragments are modelled similarly to the above to structures.`
+
+	 code {
+		`
+struct Fragment {
+    head: usize,
+    out: Vec<usize>,
+}
+
+impl Fragment {
+    fn detached(head: usize) -> Self {
+        Self {
+            head,
+            out: vec![head],
+        }
+    }
+    fn single_link(head: usize, out: usize) -> Self {
+        Self {
+            head,
+            out: vec![out],
+        }
+    }
+    fn multi_link(head: usize, left: Vec<usize>, right: Vec<usize>) -> Self {
+        let mut outs = left;
+        outs.extend(right);
+        Self { head, out: outs }
+    }
+}
+		`
+	}
+
+	`Fragments grow until there is one fragment that is the entire NFA. This happens by continually adding new states to the state list and linking the fragment outputs to the dangling outputs on the states. You may have noticed that States outputs are optional - this is because when processing a fragment, we don't know where it's going to go until we process the next step. So at first, States have no outputs - when we see the next part of the regex we may be able to determine where to connect those dangling pointers. The fragment's outputs tell us what States to go and update.`
+
+	`The algorithm is somewhat long and tedious so I won't go through it fully, but I'll run through it briefly. You should read the source code as well as Russ Cox's many articles on regular expression matching. The gist of it is as follows: connecting states to other states, and to itself, can emulate the flow of input through a state machine. For example, if we want to process 'c?', we'd create a Split state, with one output pointing to a terminal and another pointing to a Transition state with a condition that matches on the character 'c'. For a 'one or more' match like 'c+', we'd create a Transition state that matches on the character 'c' and leads into a Split state that points back to the previous state or to a terminal state. Connecting states in this fashion yields an NFA that represents our regular expression.`
+
+	`The core algorithm then becomes pretty simple. When you encounter a character/literal, say, 'A', you make an unlinked fragment pointing to a State representing that character. Then you might get a second character/literal, 'B', and you can create another unlinked fragment pointing to a State representing that character. You keep adding these to a stack as you go along. Now, say you encounter an operator, like a concatenation. You can pop the last two fragments off the stack, and form a new fragment. This fragment's head will point to the state representing 'A'. The State representing 'A' will have its outputs set to point to the State representing 'B'. The fragment output will correspond to the outputs of that State as well, so when we want to link this new fragment to something, we know we have to come off from the 'B' State. We then push this new fragment onto the stack.`
+
+	`We can keep repeating this. Say we just processed '(A.B)' and the rest of the expression is '|(C.D)'. Our whole expression is '(A.B)|(C.D)'. In postfix, we will now receive 'CD.|'. We treat the 'CD.' like we treated the 'AB.' earlier, and our stack now contains two unlinked fragments - one containing the concatenation of 'A' and 'B', and another containing the concatenation of 'C' and 'D'. We now process the '|' alt operator. We pop the other two fragments off the stack, and create a 'Split' state with outputs set to both our popped fragments. We create a new fragment where the head points to our split state and the outputs point to the set of outputs formed by both fragments we just popped.`
+
+	`The full set of conditions goes like this:`
+
+	code {`
+for e in expr {
+    match e {
+        Expr::Literal(c) => {
+            let st = State::Transition {
+                id: counter,
+                condition: Condition::Id(c),
+                output: None,
+            };
+            let idx = nfa.add_state(st);
+            stack.push(Fragment::detached(idx));
+        }
+        Expr::CharRange(l, r) => {
+            let chars = Self::range_chars(l, r)?;
+            let st = State::Transition {
+                id: counter,
+                condition: Condition::CharClass(chars),
+                output: None,
+            };
+            let idx = nfa.add_state(st);
+            stack.push(Fragment::detached(idx));
+        }
+        Expr::Concat => {
+            let right = stack.pop().ok_or("Missing right fragment")?;
+            let mut left = stack.pop().ok_or("Missing left fragment")?;
+            nfa.link_fragments(&mut left, right)?;
+            stack.push(left);
+        }
+        Expr::Alt => {
+            let right = stack.pop().ok_or("Missing right fragment")?;
+            let left = stack.pop().ok_or("Missing left fragment")?;
+            let split = State::Split {
+                id: counter,
+                left: Some(left.head),
+                right: Some(right.head),
+            };
+            let idx = nfa.add_state(split);
+            if stack.is_empty() {
+                nfa.head = idx;
+            }
+            let merged = Fragment::multi_link(idx, left.out, right.out);
+            stack.push(merged);
+        }
+        Expr::Opt => {
+            let e = stack.pop().ok_or("Missing fragment for '?' operator")?;
+            let split = State::Split {
+                id: counter,
+                left: Some(e.head),
+                right: None,
+            };
+            let idx = nfa.add_state(split);
+            nfa.head = idx;
+            let new_frag = Fragment::multi_link(idx, e.out, vec![idx]);
+            stack.push(new_frag);
+        }
+        Expr::Star => {
+            let mut e = stack.pop().ok_or("Missing fragment for '*' operator")?;
+
+            let split = State::Split {
+                id: counter,
+                left: Some(e.head),
+                right: None,
+            };
+            let idx = nfa.add_state(split.clone());
+            nfa.link_fragment(&mut e, idx)?;
+            if stack.is_empty() {
+                nfa.head = idx;
+            }
+            stack.push(Fragment::detached(idx));
+        }
+        Expr::Plus => {
+            let mut e = stack.pop().ok_or("Missing fragment for '+' operator")?;
+            let split = State::Split {
+                id: counter,
+                left: Some(e.head),
+                right: None,
+            };
+            let idx = nfa.add_state(split.clone());
+            nfa.link_fragment(&mut e, idx)?;
+            let new_frag = Fragment::single_link(e.head, idx);
+            stack.push(new_frag);
+        }
+    }
+    counter += 1;
+}
+	`}
+
+	`After running this over our entire postfix regular expression we get an NFA representing our regular expression. However, to make this feasibly traversable, we want it to be a DFA. Essentially, instead of having a bunch of states, where a state can have multiple possible transitions outwards given the same input, we just group together states. For example, if we have some Split state that points to a State matching on 'A' and a State matching on 'B', we have some non-determinism. Our 'S1', the Split state, doesn't accept any literal, but instead presents two 'possible' routes ahead. One could either move to 'S2', the 'A' State, or 'S3', the 'B' State. What if instead, we looked at 'S1', identified where it can eventually take on either an 'A' or a 'B', and collapse 'S1', 'S2' and 'S3', into one state that contains two deterministic outwards transitions?`
+
+	`This is called precomputing the epsilon closures of the NFA to form a DFA, and if I'm honest I will not be the best person to teach this. Russ Cox covers this as well. The code itself ends up not being too complicated, and at the end we have a struct that can build and process regular expressions:`
+
+	code {`
+pub trait Match: Sync {
+    fn matches(&self, s: &str) -> bool;
+}
+
+pub struct Matcher {
+    pub nfa: NFA,
+    epsilon_closure_cache: Mutex<HashMap<usize, Vec<State>>>,
+}
+
+impl Matcher {
+    pub fn new(s: &str) -> Result<Self, String> {
+        let expr = Expr::build(s)?;
+        let nfa = NFA::build(expr)?;
+        let epsilon_closure_cache = Self::precompute_epsilon_closures(&nfa);
+        Ok(Self {
+            nfa,
+            epsilon_closure_cache: Mutex::new(epsilon_closure_cache),
+        })
+    }
+
+    fn precompute_epsilon_closures(nfa: &NFA) -> HashMap<usize, Vec<State>> {
+        (0..nfa.size())
+            .map(|idx| {
+                let mut seen = HashSet::new();
+                (
+                    idx,
+                    Self::compute_epsilon_closure(nfa, &mut seen, &nfa.get_state(idx)),
+                )
+            })
+            .collect()
+    }
+
+    fn compute_epsilon_closure(nfa: &NFA, seen: &mut HashSet<usize>, state: &State) -> Vec<State> {
+        if !seen.insert(state.get_id()) {
+            return Vec::new();
+        }
+        match state {
+            State::Split { left, right, .. } => {
+                let mut out = vec![state.clone()];
+                out.extend(
+                    left.map(|idx| Self::compute_epsilon_closure(nfa, seen, &nfa.get_state(idx)))
+                        .unwrap_or_default(),
+                );
+                out.extend(
+                    right
+                        .map(|idx| Self::compute_epsilon_closure(nfa, seen, &nfa.get_state(idx)))
+                        .unwrap_or_default(),
+                );
+                out
+            }
+            _ => vec![state.clone()],
+        }
+    }
+
+    pub fn matches(&self, s: &str) -> bool {
+        let ecc = self.epsilon_closure_cache.lock().unwrap();
+        let start = ecc.get(&self.nfa.start()).cloned().unwrap_or_default();
+        let final_states = s.chars().fold(start, |current, c| {
+            current
+                .into_iter()
+                .flat_map(|st| match st {
+                    State::Transition { output, .. } if st.matches_condition(c) => output
+                        .and_then(|o| ecc.get(&o))
+                        .cloned()
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                })
+                .collect()
+        });
+        final_states
+            .iter()
+            .any(|st| matches!(st, State::Accept { .. }))
+    }
+}
+
+impl Match for Matcher {
+    fn matches(&self, s: &str) -> bool {
+        self.matches(s)
+    }
+}
+	`}
+
+	}
+}
+
+section lexer {
+	paragraph {
+		h1 {`Turning raw text into a stream of tokens`}
+		`Lexing is surprisingly simple, at least when you don't care about efficiency. My implementation is essentially a sliding window that keeps growing until it no longer matches any of my tokens defined though Regex. This sets up a system for lexing - that is, the token we identify is the longest token possible. I made some changes to allow lexing of text blocks, namely, if we encounter a backtick, which is used to delimit text blocks, just consume raw text until the next backtick.`
+
+		`This is the core function which calls some helper functions to organise the lexing process:`
+
+		code {`
+fn best_match(&mut self) -> Option<(TokenKind, usize)> {
+    let mut candidate = String::new();
+    let mut last_match: Option<(TokenKind, usize)> = None;
+    let mut chars = self.input[self.position.offset()..].chars().peekable();
+    let mut char_count = 0;
+
+    // Keep adding one character at a time until no match is found
+    while let Some(&ch) = chars.peek() {
+        // Add the next character to our candidate string
+        candidate.push(ch);
+        char_count += 1;
+        chars.next();
+
+        let mut matched = false;
+        for spec in &self.specs {
+            if let Some(kind) = spec.try_match(&candidate) {
+                last_match = Some((kind.clone(), char_count));
+                matched = true;
+                break;
+            }
+        }
+
+        if !matched {
+            break;
+        }
+    }
+
+    // Apply the match if we found one
+    if let Some((kind, matched_chars)) = last_match {
+        // Advance exactly the number of matched characters
+        for _ in 0..matched_chars {
+            self.advance_char();
+        }
+        Some((kind, matched_chars))
+    } else {
+        None
+    }
+}
+		`}
+
+		`And I then provided an Iterator implementation so I can simply loop over the token stream:`
+
+		code {`
+impl<'a> Iterator for Lexer<'a> {
+    type Item = Result<Token, LexerError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_token()
+    }
+}
+		`}
+
+		`I also added some additional diagnostics code to help see where in the source file tokens are, to help deal with any errors during the lexing and parsing process. This is as simple as tracking the line and column we're on when emitting a token.`
+	}
+	
+
+}
+
+section parser {
+	paragraph{
+		h1 {`Building the abstract syntax tree`}
+
+		`Another surprisingly simple part was building the AST from the token stream. All this involved was laying out the structure of the language into a set of recursive parsers. We start at the top, and 'expect' tokens in a certain order. Our top-level constructs are 'section' or 'article' blocks, so we start at parsing them. In a 'section', for example, we would then expect a 'paragraph', so we try and parse what's inside as a 'paragraph'. A 'paragraph' contains a bunch of statements, so we'd expect a series of statements. Note, we'd also be expecting our structural tokens like braces throughout this as well. So parsing a 'paragraph' might look like: expect the 'Paragraph' token, then a 'LeftBrace', then some set of 'Statement' constructs, and then a 'RightBrace'.`
+
+		`Our terminal nodes are things like braces or text blocks, anything that can be parsed without another 'parse' call. We just do a series of 'expect or parse this token' depending on what we've just parsed now. A simple one is parsing the 'article' statement:`
+
+		code {`
+fn parse_article_declaration(&mut self) -> Result<ArticleDeclaration, ParserError> {
+    self.expect_token(TokenKind::Article)?;
+    // Allow an optional article name.
+    let name = match self.peek_token()? {
+        Some(token) if token.kind == TokenKind::LBrace => String::new(),
+        _ => self.expect_ident()?,
+    };
+    self.expect_token(TokenKind::LBrace)?;
+    let section_calls = self.parse_until(TokenKind::RBrace, Self::expect_ident_dynamic)?;
+    self.expect_token(TokenKind::RBrace)?;
+    Ok(ArticleDeclaration {
+        name,
+        section_calls,
+    })
+}
+		`}
+	
+		`'parse_until' just says, keep parsing using this function (one that captures identifiers) until you hit this token (a right brace). This captures the section identifiers. The rest of the parsers are similar. They inspect the token we're looking at, determine if it's valid given the structure we've currently built, and expect a bunch of other tokens in some order that may be determined by another parser. The only other interesting bit here is how we represent the AST. We must abstract sets of tokens into AST nodes, and represent our 'program' as something rooted at the 'article' level and branching out into a series of ordered sections. Something like this can do the trick!`
+
+		code {`
+pub enum AstNode<'a> {
+    Article(&'a ArticleDeclaration),
+    Section(&'a SectionDeclaration),
+    Paragraph(&'a Paragraph),
+    Statement(&'a Statement),
+    List(&'a List),
+}
+
+impl<'a> AstNode<'a> {
+    pub fn children(&self, program: &'a Program) -> Vec<AstNode<'a>> {
+        match self {
+            AstNode::Article(article) => article
+                .section_calls
+                .iter()
+                .filter_map(|name| program.sections.get(name).map(AstNode::Section))
+                .collect(),
+            AstNode::Section(section) => {
+                section.paragraphs.iter().map(AstNode::Paragraph).collect()
+            }
+            AstNode::Paragraph(paragraph) => paragraph
+                .statements
+                .iter()
+                .map(AstNode::Statement)
+                .collect(),
+            AstNode::Statement(stmt) => match stmt {
+                Statement::List(list) => vec![AstNode::List(list)],
+                _ => vec![],
+            },
+            AstNode::List(_) => vec![],
+        }
+    }
+}
+		`}
+	}
+}
+
+section codegen {
+	paragraph {
+		h1 {`Generating the output HTML`}
+		`Code generation, in my case is the easiest bit. Just specify the HTML to be generated from each node. For example, when a paragraph is declared, we want a line break.`
+
+		code {`
+fn generate_paragraph<'a, W: Write>(
+    buf: &'a mut W,
+    _: &Paragraph,
+) -> Result<(), GenerationError> {
+    Self::write_buf(buf, "<br/>".to_string())
+}
+		`}
+
+		`When a text block or a heading comes up, we just output the text with some formatting. I've chosen to compile with Tailwind styles baked in. This is another reason why nobody should ever use this. It's coupled tightly with my own framework choices. Of course, this could be abstracted away, I could define some configuration file where users input what they want generated for each token.`
+
+		code {`
+fn generate_statement<'a, W: Write>(
+    buf: &'a mut W,
+    statement: &Statement,
+) -> Result<(), GenerationError> {
+    match statement {
+        Statement::Heading(_, c) => Self::write_buf(
+            buf,
+            format!("<h3 className='text-3xl'>'{}'</h3>", c.to_string()),
+        ),
+        Statement::TextBlock(c) => Self::write_buf(buf, format!("<p>{}</p>", c.to_string())),
+        Statement::CodeBlock(c) => Self::write_buf(
+            buf,
+            format!(
+                r"<pre className='w-full overflow-x-auto'><code>{{'{}'}}</code></pre>",
+                c.to_string()
+            ),
+        ),
+        Statement::Aside(c) => Self::write_buf(
+            buf,
+            format!(
+                r"
+        <div className='p-8 bg-opacity-10 bg-black italic'>
+            <p>{}</p>
+        </div>
+        ",
+                c.to_string()
+            ),
+        ),
+        Statement::List(l) => Self::generate_list(buf, l),
+    }
+}
+		`}
+	}
+}
+
+section outro {
+	paragraph {
+		h1 {`So that's it`}
+		`So that's the long and the short of. It's totally pointless and not even that great. I'm writing this article using it and I can't even use backticks in the article source code because I haven't implemented delimiters inside text blocks. Or any kind of styling in text blocks. I can't do code snippets in text. Because they use backticks usually. Nobody should use this, but it's a good stepping stone onto making something useful.`
+	}
+}
+
+article {
+	intro
+	regex
+	lexer
+	parser
+	codegen
+	outro
+}
